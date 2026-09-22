@@ -25,26 +25,39 @@ if uploaded_file is not None:
     img_array = np.array(image.convert("RGB"))
     img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
-    # 3. DIP Logic: Haze / Brightness Analysis
-    # Convert image to Gray to measure variance/contrast (Haze reduces contrast)
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    contrast = gray.std()  # Standard deviation of pixel intensities
+    # 3. Smart DIP Logic for Smoke, Dust & Smog Detection
 
-    # Convert image to HSV to analyze Saturation (Clean sky = high blue saturation)
-    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-    saturation = hsv[:, :, 1].mean()
+    # A) Gray/Smoke Ratio (Pollution & dark/white smoke has very similar R, G, B channel values)
+    b, g, r = cv2.split(img_bgr.astype(np.float32))
+    rg_diff = np.abs(r - g)
+    gb_diff = np.abs(g - b)
+    rb_diff = np.abs(r - b)
+    # Low difference between R, G, B channels = Gray/Murky/Polluted pixels
+    gray_mask = (rg_diff < 25) & (gb_diff < 25) & (rb_diff < 25)
+    gray_percentage = (np.sum(gray_mask) / gray_mask.size) * 100
 
-    # Calculate an estimated Pollution Index (0 to 100)
-    # Low contrast + low saturation = Hazy/Polluted sky
-    pollution_score = max(0, min(100, int(100 - (contrast + saturation / 2))))
+    # B) Dark Channel Prior for Atmosphere Haze
+    min_channel = np.min(img_bgr, axis=2)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    dark_channel = cv2.erode(min_channel, kernel)
+    haze_intensity = dark_channel.mean()
+
+    # C) Calculate Final Pollution Score (0 to 100)
+    # Heavy weight on gray smoke/haze presence
+    pollution_score = int(
+        np.clip((gray_percentage * 0.75) + (haze_intensity * 0.35), 0, 100)
+    )
 
     # 4. Display Results
     st.subheader("📊 Analysis Results")
     st.write(f"**Estimated Pollution Index:** {pollution_score} / 100")
+    st.write(
+        f"*(Debug Stats -> Gray/Smoke Pixels: {int(gray_percentage)}% | Haze Intensity: {int(haze_intensity)})*"
+    )
 
     if pollution_score < 35:
         st.success("🟢 **Clean Sky:** Clear air quality detected!")
-    elif pollution_score < 65:
-        st.warning("🟡 **Moderate Haze:** Mild atmospheric pollution/smog.")
+    elif pollution_score < 60:
+        st.warning("🟡 **Moderate Haze:** Mild smog/dust present.")
     else:
-        st.error("🔴 **Heavy Smog/Pollution:** High level of atmospheric haze!")
+        st.error("🔴 **Heavy Smog/Pollution:** High levels of pollution/smoke!")
